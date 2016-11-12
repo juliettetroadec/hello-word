@@ -1,0 +1,100 @@
+### packages
+install.packages("caret")
+install.packages("pROC")
+library(caret)
+library(pROC)
+
+### Data
+
+# Titanic dataset
+df <- read.csv('http://math.ucdenver.edu/RTutorial/titanic.txt',sep='\t')
+print(str(df))
+
+# Extracting titles
+df$Title <- ifelse(grepl('Mr ',df$Name),'Mr',ifelse(grepl('Mrs ',df$Name),'Mrs',ifelse(grepl('Miss',df$Name),'Miss','Nothing')))
+# Handling age missing values (replaced by median age)
+data$Age[is.na(data$Age)] <- median(data$Age, na.rm=T)
+# Set target variable (last column)
+df <- df[c('PClass', 'Age',    'Sex',   'Title', 'Survived')]
+print(str(df))
+
+# Dummifying factor variables
+df$Title <- as.factor(df$Title)
+dfDummy <- dummyVars("~.",data=df, fullRank=F)
+dfDF <- as.data.frame(predict(titanicDummy,df))
+print(names(df))
+
+# proportion event, target variable
+prop.table(table(df$Survivied))
+
+# generalizing preditors/predicted variables
+outcomeName <- 'Survived'
+predictorsNames <- names(df)[names(df) != outcomeName]
+
+
+### Gbm model
+# what modeling types does the gbm function support?
+getModelInfo()$gbm$type
+
+# factoring the target variable
+df$Survived2 <- ifelse(df$Survived==1,'yes','no')
+df$Survived2 <- as.factor(df$Survived2)
+outcomeName <- 'Survived2'
+
+# train/test sets
+set.seed(94)
+ind <- sample(nrow(df), 0.75*nrow(df), replace = FALSE)
+traindf <- df[ind,]
+testdf <- df[-ind,]
+
+# control (3-fold cross-validation)
+control <- trainControl(method='cv', number=3, returnResamp='none', summaryFunction = twoClassSummary, classProbs = TRUE)
+
+
+#### gbm model
+gbm.model <- train(traindf[,predictorsNames], traindf[,outcomeName], method='gbm', trControl=control, metric = "ROC", preProc = c("center", "scale"))
+
+# variables importance:
+summary(gbm.model)
+
+# best tuning parameters:
+print(model)
+
+# gbm evaluation
+class.prediction <- predict(object=model, testdf[,predictorsNames], type='raw')
+head(class.prediction) # predict class and not probabilities
+
+# accuracy score
+print(postResample(pred=class.prediction, obs=as.factor(testdf[,outcomeName])))
+
+# probabilites 
+prob.prediction <- predict(object=model, testdf[,predictorsNames], type='prob')
+head(prob.prediction)
+
+# auc score
+auc <- roc(ifelse(testdf[,outcomeName]=="yes",1,0), prob.prediction[[2]])
+print(auc$auc)
+
+
+### Glmnet model
+
+# modeling types:
+getModelInfo()$glmnet$type
+
+# cross validation control
+control <- trainControl(method='cv', number=3, returnResamp='none')
+
+# running the model
+glmnet.model <- train(traindf[,predictorsNames], traindf[,outcomeName], method='glmnet',  metric = "RMSE", trControl=control)
+# metric is not ROC anymore but RMSE since we use a regression.
+
+# prediction & AUC score
+prediction <- predict(object=glmnet.model, testdf[,predictorsNames])
+auc <- roc(testdf[,outcomeName], prediction)
+print(auc$auc)
+
+# variables importance (positive and negative)
+plot(varImp(glmnet.model, scale=FALSE))
+# don't forget to set scale=FALSE
+
+
