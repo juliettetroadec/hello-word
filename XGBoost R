@@ -1,0 +1,105 @@
+
+
+setwd('/Users/juliettetroadec/Desktop/Kaggle/Otto')
+library(xgboost)
+library(methods)
+library(data.table)
+library(magrittr)
+library(Ckmeans.1d.dp)
+library(DiagrammeR)
+
+########## DATA PREPARATION ########## 
+train <- fread('train.csv', header = T, stringsAsFactors = F)
+test <- fread('test.csv', header=TRUE, stringsAsFactors = F)
+dim(train)
+dim(test)
+train[1:6,1:5, with = FALSE] # with = FALSE gives the columns entirely
+test[1:6, 1:5, with = FALSE] # with = TRUE onyl gives columns' names
+# each column represents a feature measured by an integer
+# each row is an Otto product
+
+# The first column ID doesn't add information to this analysis, we remove it
+train[,id := NULL]
+test[,id := NULL]
+
+# As it is a multiclass classification problem, we need to extract the labels (of the target variable)
+train[1:6,ncol(train), with = FALSE]
+# save the name of the last column
+nameLastCol <- names(train)[ncol(train)]
+
+# Classes are provided as character in the target column
+# XGBoost does not support anything but numbers: we convert classes into integers (it must start at 0)
+# gsub search a pattern in a string and replace it with another one
+y <- train[,nameLastCol, with = FALSE][[1]] %>% gsub('Class_','',.) %>% {as.integer(.)-1}
+y[1:5]
+unique(y)
+
+# Let's remove the label column from the training dataset in order XGBoost not to use it to predict the labels
+train[,nameLastCol := NULL, with=FALSE]
+
+# data.table is very useful but not supported by XGBoost (that only works with numeric format)
+# .SD stands for "Subset of Data.table" 
+trainMatrix <- train[,lapply(.SD, as.numeric)] %>% as.matrix
+testMatrix <- test[,lapply(.SD,as.numeric)] %>% as.matrix
+
+########## MODEL TRAINING ########## 
+
+# we'll use the cross validation to evaluate our error rate
+# recall: we set first class at 0
+numberOfClasses <- max(y) + 1
+param <- list("objective" = "multi:softprob",
+              "eval_metric" = "mlogloss",
+              "num_class" = numberOfClasses)
+
+cv.nround <- 5
+cv.nfold <- 3
+
+bst.cv = xgb.cv(param=param, data = trainMatrix, label = y, 
+                nfold = cv.nfold, nrounds = cv.nround)
+# the error rate is low on the test set for a 5 rounds training model
+
+# now let's implement the real training
+nround  <- 50
+bst <- xgboost(param=param, data = trainMatrix, label = y, nrounds=nround)
+
+##### MODEL UNDERSTANDING
+# we built a model using 50 trees
+# In the final model the leafs are supposed to be as pure as possible for each tree, 
+# Meaning in our case that each leaf should be made of one class of Otto product only 
+# of course it is not true, but that’s what we try to achieve in a minimum of splits
+
+# Not all splits are equally important. The first split of a tree will have more impact on the purity, for instance, the deepest split. 
+# Intuitively, we understand the first split makes most of the work, and the following splits focus on smaller parts of the dataset which have been missclassified by the first tree
+
+# in Boosting we try to optimize the missclassification at each round (the loss)
+# So the first tree will do the big work and the following trees will focus on the remaining, 
+# on the parts not correctly learned by the previous trees.
+# The improvement brought by each split can be measured, it is the gain.
+# Each split is done on one feature, on a particular value.
+
+model <- xgb.dump(bst, with.stats = T)
+model[1:10]
+# this allows to see how the splits are made: each line represents a branch (tree ID, feature ID, points where are splits, next branches' information - left, right when NA for that row)
+
+# A better information is displayed when using Feature Importance (averaging the gain of each feature for all split and all trees)
+# Get the feature real names:
+names <- dimnames(trainMatrix)[[2]]
+# Compute feature importance matrix:
+importance_matrix <- xgb.importance(names, model = bst)
+# Nice graph
+xgb.plot.importance(importance_matrix[1:10,])
+
+# we can see the first 10 most important features.
+# this function gives a color to each bar: a K-means clustering is applied to group each feature by importance.
+# From here you can take several actions 
+# 1. remove the less important feature (feature selection process)
+# 2. go deeper in the interaction between the most important features and labels
+# 3. reason about why these features are so importat (in Otto challenge we can’t go this way because there is not enough information).
+
+# Feature importance gives feature weight information but not interaction between features
+xgb.plot.tree(feature_names = names, model = bst, n_first_tree = 2)
+
+# On simple models the first 2 trees may be enough. 
+# Here, it might not be the case. We can see from the size of the trees that the intersaction between features is complicated. 
+# Besides, XGBoost generate k trees at each round for a k-classification problem. 
+# Therefore the two trees illustrated here are trying to classify data into different classes.
